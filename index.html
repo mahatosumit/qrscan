@@ -54,11 +54,15 @@
     const uploadInput = document.getElementById('uploadInput');
 
     async function setupCamera() {
-      const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment' } });
-      video.srcObject = stream;
-      await new Promise((resolve) => video.onloadedmetadata = resolve);
-      video.play();
-      requestAnimationFrame(tick);
+      try {
+        const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment' } });
+        video.srcObject = stream;
+        await new Promise((resolve) => video.onloadedmetadata = resolve);
+        video.play();
+        requestAnimationFrame(tick);
+      } catch (error) {
+        console.error('Error accessing camera:', error);
+      }
     }
 
     function tick() {
@@ -119,6 +123,9 @@
           } else {
             result.innerText = 'No QR Code detected in the uploaded image.';
           }
+        };
+        image.onerror = () => {
+          result.innerText = 'Error loading image.';
         };
       }
     });
