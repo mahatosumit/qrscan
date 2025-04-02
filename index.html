@@ -1,0 +1,532 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>QR & Barcode Scanner with MQTT</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/mqtt/4.3.7/mqtt.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/quagga/0.12.1/quagga.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jsQR/1.4.0/jsQR.min.js"></script>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            margin: 0;
+            padding: 0;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            height: 100vh;
+            background-color: #f5f5f5;
+        }
+        .container {
+            width: 90%;
+            max-width: 600px;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+        }
+        h1 {
+            color: #333;
+            margin-bottom: 10px;
+        }
+        .scanner-container {
+            width: 100%;
+            position: relative;
+            overflow: hidden;
+            border-radius: 10px;
+            margin: 20px 0;
+        }
+        #scanner-view {
+            width: 100%;
+            height: 300px;
+            background-color: #000;
+            position: relative;
+        }
+        #video-preview {
+            width: 100%;
+            height: 100%;
+            object-fit: cover;
+        }
+        #canvas {
+            display: none;
+        }
+        .controls {
+            display: flex;
+            flex-direction: column;
+            width: 100%;
+            margin-top: 10px;
+        }
+        button {
+            padding: 12px;
+            margin: 5px 0;
+            border: none;
+            border-radius: 5px;
+            background-color: #4CAF50;
+            color: white;
+            font-size: 16px;
+            cursor: pointer;
+        }
+        button:disabled {
+            background-color: #cccccc;
+        }
+        #server-settings {
+            width: 100%;
+            margin: 20px 0;
+            padding: 15px;
+            border-radius: 10px;
+            background-color: #e0e0e0;
+        }
+        .setting {
+            margin: 10px 0;
+        }
+        label {
+            display: block;
+            margin-bottom: 5px;
+            font-weight: bold;
+        }
+        input, select {
+            width: 100%;
+            padding: 8px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            box-sizing: border-box;
+        }
+        #status {
+            margin-top: 20px;
+            padding: 10px;
+            border-radius: 5px;
+            width: 100%;
+            text-align: center;
+        }
+        .connected {
+            background-color: #d4edda;
+            color: #155724;
+        }
+        .disconnected {
+            background-color: #f8d7da;
+            color: #721c24;
+        }
+        .result {
+            margin-top: 15px;
+            padding: 10px;
+            border-radius: 5px;
+            width: 100%;
+            background-color: #e2f3f5;
+            word-break: break-all;
+        }
+        .scanner-type {
+            display: flex;
+            justify-content: space-between;
+            width: 100%;
+            margin: 10px 0;
+        }
+        .scanner-type button {
+            flex: 1;
+            margin: 0 5px;
+        }
+        .scanner-type button.active {
+            background-color: #357a38;
+        }
+        .advanced-toggle {
+            text-align: right;
+            width: 100%;
+            margin: 5px 0;
+        }
+        .advanced-toggle a {
+            color: #0066cc;
+            cursor: pointer;
+            text-decoration: underline;
+        }
+        .advanced-settings {
+            display: none;
+            width: 100%;
+            padding: 10px;
+            background-color: #f0f0f0;
+            border-radius: 5px;
+            margin-top: 10px;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>QR & Barcode Scanner</h1>
+        
+        <div id="server-settings">
+            <div class="setting">
+                <label for="server-address">MQTT Broker Address:</label>
+                <input type="text" id="server-address" placeholder="e.g. broker.hivemq.com">
+            </div>
+            <div class="setting">
+                <label for="server-port">MQTT WebSocket Port:</label>
+                <input type="number" id="server-port" value="8884">
+            </div>
+            <div class="setting">
+                <label for="use-ssl">Use Secure Connection (WSS):</label>
+                <select id="use-ssl">
+                    <option value="true" selected>Yes (Recommended)</option>
+                    <option value="false">No (Insecure)</option>
+                </select>
+            </div>
+            <div class="setting">
+                <label for="mqtt-topic">MQTT Topic:</label>
+                <input type="text" id="mqtt-topic" value="scanner/data">
+            </div>
+            
+            <div class="advanced-toggle">
+                <a id="toggle-advanced">Show Authentication Options</a>
+            </div>
+            
+            <div id="advanced-settings" class="advanced-settings">
+                <div class="setting">
+                    <label for="mqtt-username">MQTT Username:</label>
+                    <input type="text" id="mqtt-username" placeholder="Leave empty if not required">
+                </div>
+                <div class="setting">
+                    <label for="mqtt-password">MQTT Password:</label>
+                    <input type="password" id="mqtt-password" placeholder="Leave empty if not required">
+                </div>
+            </div>
+            
+            <button id="connect-btn">Connect to Broker</button>
+        </div>
+        
+        <div id="status" class="disconnected">Disconnected</div>
+        
+        <div class="scanner-type">
+            <button id="qr-mode" class="active">QR Code</button>
+            <button id="barcode-mode">Barcode</button>
+        </div>
+        
+        <div class="scanner-container">
+            <div id="scanner-view">
+                <video id="video-preview" autoplay playsinline></video>
+                <canvas id="canvas"></canvas>
+            </div>
+        </div>
+        
+        <div class="controls">
+            <button id="start-scan" disabled>Start Scanning</button>
+            <button id="stop-scan" disabled>Stop Scanning</button>
+        </div>
+        
+        <div class="result" id="result-container">
+            <strong>Last Scan:</strong> 
+            <div id="scan-result">None</div>
+        </div>
+    </div>
+
+    <script>
+        // DOM elements
+        const videoPreview = document.getElementById('video-preview');
+        const canvas = document.getElementById('canvas');
+        const startScanBtn = document.getElementById('start-scan');
+        const stopScanBtn = document.getElementById('stop-scan');
+        const resultContainer = document.getElementById('scan-result');
+        const connectBtn = document.getElementById('connect-btn');
+        const statusElement = document.getElementById('status');
+        const serverAddress = document.getElementById('server-address');
+        const serverPort = document.getElementById('server-port');
+        const useSSL = document.getElementById('use-ssl');
+        const mqttTopic = document.getElementById('mqtt-topic');
+        const mqttUsername = document.getElementById('mqtt-username');
+        const mqttPassword = document.getElementById('mqtt-password');
+        const qrModeBtn = document.getElementById('qr-mode');
+        const barcodeModeBtn = document.getElementById('barcode-mode');
+        const toggleAdvanced = document.getElementById('toggle-advanced');
+        const advancedSettings = document.getElementById('advanced-settings');
+
+        // Variables
+        let scanning = false;
+        let scannerType = 'qr'; // Default to QR code scanning
+        let scanInterval;
+        let mqttClient = null;
+        let stream = null;
+
+        // Toggle advanced settings
+        toggleAdvanced.addEventListener('click', () => {
+            if (advancedSettings.style.display === 'block') {
+                advancedSettings.style.display = 'none';
+                toggleAdvanced.textContent = 'Show Authentication Options';
+            } else {
+                advancedSettings.style.display = 'block';
+                toggleAdvanced.textContent = 'Hide Authentication Options';
+            }
+        });
+
+        // Default broker settings
+        function setDefaultBrokerSettings() {
+            // Public MQTT broker with WebSocket support
+            serverAddress.value = 'broker.hivemq.com';
+            serverPort.value = '8884';
+            useSSL.value = 'true';
+        }
+        setDefaultBrokerSettings();
+
+        // Connect to MQTT broker
+        connectBtn.addEventListener('click', () => {
+            if (mqttClient && mqttClient.connected) {
+                mqttClient.end();
+                updateConnectionStatus(false);
+                connectBtn.textContent = 'Connect to Broker';
+                startScanBtn.disabled = true;
+                return;
+            }
+
+            const broker = serverAddress.value;
+            const port = serverPort.value;
+            const isSSL = useSSL.value === 'true';
+            const username = mqttUsername.value;
+            const password = mqttPassword.value;
+            
+            if (!broker) {
+                alert('Please enter MQTT broker address');
+                return;
+            }
+
+            const protocol = isSSL ? 'wss' : 'ws';
+            const brokerUrl = `${protocol}://${broker}:${port}/mqtt`;
+            
+            console.log(`Connecting to MQTT broker at ${brokerUrl}`);
+            statusElement.textContent = 'Connecting...';
+            
+            try {
+                const options = {
+                    clientId: 'scanner_' + Math.random().toString(16).substr(2, 8),
+                    clean: true,
+                    connectTimeout: 5000
+                };
+                
+                // Add authentication if provided
+                if (username) options.username = username;
+                if (password) options.password = password;
+                
+                mqttClient = mqtt.connect(brokerUrl, options);
+                
+                mqttClient.on('connect', () => {
+                    console.log('Connected to MQTT broker');
+                    updateConnectionStatus(true);
+                    connectBtn.textContent = 'Disconnect';
+                    startScanBtn.disabled = false;
+                });
+                
+                mqttClient.on('error', (err) => {
+                    console.error('MQTT connection error:', err);
+                    updateConnectionStatus(false);
+                    alert(`Connection error: ${err.message}`);
+                });
+                
+                mqttClient.on('close', () => {
+                    console.log('MQTT connection closed');
+                    updateConnectionStatus(false);
+                });
+            } catch (error) {
+                console.error('Failed to connect to MQTT broker:', error);
+                updateConnectionStatus(false);
+                alert(`Connection failed: ${error.message}`);
+            }
+        });
+
+        function updateConnectionStatus(connected) {
+            if (connected) {
+                statusElement.textContent = 'Connected to Broker';
+                statusElement.className = 'connected';
+            } else {
+                statusElement.textContent = 'Disconnected';
+                statusElement.className = 'disconnected';
+                startScanBtn.disabled = true;
+                if (scanning) {
+                    stopScanning();
+                }
+            }
+        }
+
+        // Scanner type selection
+        qrModeBtn.addEventListener('click', () => {
+            scannerType = 'qr';
+            qrModeBtn.classList.add('active');
+            barcodeModeBtn.classList.remove('active');
+            if (scanning) {
+                stopScanning();
+                startScanning();
+            }
+        });
+
+        barcodeModeBtn.addEventListener('click', () => {
+            scannerType = 'barcode';
+            barcodeModeBtn.classList.add('active');
+            qrModeBtn.classList.remove('active');
+            if (scanning) {
+                stopScanning();
+                startScanning();
+            }
+        });
+
+        // Start scanning
+        startScanBtn.addEventListener('click', startScanning);
+        
+        function startScanning() {
+            if (!mqttClient || !mqttClient.connected) {
+                alert('Please connect to the broker first');
+                return;
+            }
+            
+            if (scanning) return;
+            
+            // Request camera access
+            navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment' } })
+                .then(videoStream => {
+                    stream = videoStream;
+                    videoPreview.srcObject = stream;
+                    scanning = true;
+                    startScanBtn.disabled = true;
+                    stopScanBtn.disabled = false;
+                    
+                    if (scannerType === 'qr') {
+                        startQRScanner();
+                    } else {
+                        startBarcodeScanner();
+                    }
+                })
+                .catch(err => {
+                    console.error('Error accessing camera:', err);
+                    alert(`Camera access error: ${err.message}. Make sure your browser has camera permissions.`);
+                });
+        }
+
+        // Stop scanning
+        stopScanBtn.addEventListener('click', stopScanning);
+        
+        function stopScanning() {
+            if (!scanning) return;
+            
+            if (scannerType === 'qr') {
+                clearInterval(scanInterval);
+            } else {
+                Quagga.stop();
+            }
+            
+            if (stream) {
+                stream.getTracks().forEach(track => track.stop());
+                stream = null;
+            }
+            
+            scanning = false;
+            startScanBtn.disabled = false;
+            stopScanBtn.disabled = true;
+        }
+
+        // Start QR code scanner
+        function startQRScanner() {
+            const ctx = canvas.getContext('2d');
+            canvas.width = videoPreview.videoWidth || 640;
+            canvas.height = videoPreview.videoHeight || 480;
+            
+            scanInterval = setInterval(() => {
+                if (videoPreview.readyState === videoPreview.HAVE_ENOUGH_DATA) {
+                    canvas.width = videoPreview.videoWidth;
+                    canvas.height = videoPreview.videoHeight;
+                    ctx.drawImage(videoPreview, 0, 0, canvas.width, canvas.height);
+                    
+                    const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+                    const code = jsQR(imageData.data, imageData.width, imageData.height, {
+                        inversionAttempts: 'dontInvert',
+                    });
+                    
+                    if (code) {
+                        const result = code.data;
+                        console.log('QR Code detected:', result);
+                        handleScanResult('QR Code', result);
+                    }
+                }
+            }, 200);
+        }
+
+        // Start barcode scanner
+        function startBarcodeScanner() {
+            Quagga.init({
+                inputStream: {
+                    name: "Live",
+                    type: "LiveStream",
+                    target: document.querySelector('#scanner-view'),
+                    constraints: {
+                        width: 640,
+                        height: 480,
+                        facingMode: "environment"
+                    },
+                },
+                locator: {
+                    patchSize: "medium",
+                    halfSample: true
+                },
+                numOfWorkers: 2,
+                decoder: {
+                    readers: [
+                        "code_128_reader",
+                        "ean_reader",
+                        "ean_8_reader",
+                        "code_39_reader",
+                        "code_93_reader",
+                        "upc_reader",
+                        "upc_e_reader",
+                        "codabar_reader"
+                    ]
+                },
+                locate: true
+            }, function(err) {
+                if (err) {
+                    console.error('Quagga initialization error:', err);
+                    alert(`Barcode scanner error: ${err}`);
+                    stopScanning();
+                    return;
+                }
+                
+                console.log("Barcode scanner initialized");
+                Quagga.start();
+            });
+            
+            Quagga.onDetected((data) => {
+                if (data && data.codeResult) {
+                    const result = data.codeResult.code;
+                    const format = data.codeResult.format;
+                    console.log(`Barcode detected (${format}):`, result);
+                    handleScanResult(`Barcode (${format})`, result);
+                }
+            });
+        }
+
+        // Handle scan results
+        function handleScanResult(type, result) {
+            // Prevent duplicate scans
+            if (resultContainer.textContent === result) return;
+            
+            resultContainer.textContent = result;
+            
+            // Send to MQTT server
+            if (mqttClient && mqttClient.connected) {
+                const message = {
+                    type: type,
+                    data: result,
+                    timestamp: new Date().toISOString(),
+                    source: 'web-scanner'
+                };
+                
+                mqttClient.publish(mqttTopic.value, JSON.stringify(message), { qos: 1 }, (err) => {
+                    if (err) {
+                        console.error('MQTT publish error:', err);
+                    } else {
+                        console.log('Data sent to MQTT broker');
+                    }
+                });
+            }
+        }
+
+        // Handle visibility changes (user switches tabs/apps)
+        document.addEventListener('visibilitychange', () => {
+            if (document.hidden && scanning) {
+                // User switched away from the app
+                stopScanning();
+            }
+        });
+    </script>
+</body>
+</html>
